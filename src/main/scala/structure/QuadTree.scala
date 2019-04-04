@@ -1,12 +1,12 @@
 package structure
 
 import org.apache.spark.SparkContext
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 
-class QuadTree (sc: SparkContext, treeId: Integer, minValues: Array[Double], maxValues: Array[Double], shift: Array[Double]) extends Serializable {
+class QuadTree (sc: SparkContext, treeId: Integer, minValues: Array[Double], maxValues: Array[Double], shift: Array[Double], neighborhoodSize: Int) extends Serializable {
 
-  // TODO: Works for 2d points only
-  val root: QuadNode = new QuadNode("", "0", minValues(0), minValues(1), Math.abs(maxValues(0) - minValues(0)), Math.abs(maxValues(1) - minValues(1)))
+  val root: QuadNode = new QuadNode("", "0", minValues(0), minValues(1), Math.abs(maxValues(0) - minValues(0)), Math.abs(maxValues(1) - minValues(1)), neighborhoodSize)
 
   var nodesRDD: RDD[(String, QuadNode)] = sc.parallelize(List(root).map(n => (n.getId, n)))
 
@@ -31,64 +31,56 @@ class QuadTree (sc: SparkContext, treeId: Integer, minValues: Array[Double], max
 
   def deleteElements(counts: Map[String, Integer]): Unit = {
     nodesRDD = nodesRDD.map(node => {
-      var map: List[(Integer, Long)] = List()
-      val nodeId = node._1
-      var len = nodeId.length
+
+      var countUpdates: List[(Integer, Long)] = List()
+
+      val curNodeId = node._1
+      var len = curNodeId.length
       while (len > 0) {
-        val id = nodeId.substring(0, len)
+        val id = curNodeId.substring(0, len)
         val count: Long = counts.getOrElse[Integer](id, -1).toLong
-        if (count > 0) map = map :+ (id.length - 1: Integer, count)
+        if (count > 0) countUpdates = countUpdates :+ (id.length - 1: Integer, count)
         len = len - 1
       }
       val newNode = node
-      newNode._2.decreaseCounts(map)
+      newNode._2.decreaseCounts(countUpdates)
       newNode
     })
   }
 
   def trimTree(): Unit = {
     val idsOfNodesToBeDeleted = nodesRDD
-      .filter(node => node._2.getCount <= node._2.MAX_ELEMENTS_ALLOWED && node._2.hasChildren)
+      .filter(node => node._2.getCount <= node._2.getNeighborhoodSize && node._2.hasChildren)
       .map(node => node._1)
       .collect()
 
-    // Delete them and their children
+    // Delete their children, mark them as children-less
     nodesRDD = nodesRDD.filter(node => {
       var toBeKept: Boolean = true
       for (id <- idsOfNodesToBeDeleted)
-        if (node._1.startsWith(id))
+        if (node._1.startsWith(id) && node._1.length > id.length)
           toBeKept = false
       toBeKept || node._1 == "0"
-    })
-
-    updateHasChildrenOfNodes()
-  }
-
-  def updateHasChildrenOfNodes(): Unit = {
-    val ids: Array[String] = nodesRDD.map(_._1).collect()
-    nodesRDD = nodesRDD.map(node => {
-      var hasDescendants: Boolean = false
-      var i = 0
-      while (i < ids.length && !hasDescendants) {
-        if (ids(i).startsWith(node._1) && ids(i).length > node._1.length)
-          hasDescendants = true
-        i = i + 1
+    }).map(node => {
+      if (idsOfNodesToBeDeleted.contains(node._1)) {
+        val newNode = node
+        newNode._2.hasChildren = false
+        newNode
+      } else {
+        node
       }
 
-      val newNode = node
-      newNode._2.hasChildren = hasDescendants
-      newNode
     })
   }
 
-  def findNodesNeedToBreak(): RDD[(String, QuadNode)] = nodesRDD.filter(node => node._2.getCount > node._2.MAX_ELEMENTS_ALLOWED && !node._2.hasChildren)
+  def findNodesNeedToBreak(): RDD[(String, QuadNode)] = nodesRDD.filter(node => node._2.getCount > node._2.getNeighborhoodSize && !node._2.hasChildren)
 
 
-  def breakNodes(allElements: List[Element]): Unit = {
+  def breakNodes(allElements: Broadcast[List[Element]]): Unit = {
     val nodesToBreakRDD = findNodesNeedToBreak()
 
     val newNodesToAddRDD = nodesToBreakRDD
-      .flatMap(node => node._2.breakToChildren(allElements.map(el => shiftElement(el)).filter(el => node._2.elementInBoundaries(el))))
+      .flatMap(node => node._2.breakToChildren(allElements.value.map(el => shiftElement(el)).filter(el => node._2.elementInBoundaries(el))))
       .map(node => (node.getId, node))
 
     val idsOfNodesToBreak = nodesToBreakRDD.map(_._1).collect()
@@ -118,6 +110,8 @@ class QuadTree (sc: SparkContext, treeId: Integer, minValues: Array[Double], max
   }
 
   def updateOutliernessScore(): Unit = {
+//    nodesRDD.foreach(n => println(n._1 + " -- " + n._2.getCount + " -- " + n._2.hasChildren))
+
     nodesRDD = nodesRDD.map(node => {
       if (!node._2.hasChildren) {
         val newNode = node
@@ -142,6 +136,60 @@ class QuadTree (sc: SparkContext, treeId: Integer, minValues: Array[Double], max
       println("Node: " + n._1 + " Level: " + n._2.getLevel + " Count: " + n._2.getCount + str + " Has children: " + n._2.hasChildren + " Boundaries: " + n._2.getBoundaries)
     })
     println("END OF TREE")
+  }
+
+  @Deprecated
+  def findClosestNode(element: Element, tLevel: Integer): QuadNode = {
+    var node: QuadNode = null
+    var numOfNodesAtLevel: Long = 1
+    (0 to tLevel).iterator.takeWhile(_ => numOfNodesAtLevel > 0).foreach(level => {
+      val matchingNodesRDD = nodesRDD.filter(nodeTuple => nodeTuple._2.getLevel == level && nodeTuple._2.elementInBoundaries(shiftElement(element))).map(_._2)
+      numOfNodesAtLevel = matchingNodesRDD.count
+      if (matchingNodesRDD.count() == 1) node = matchingNodesRDD.first
+    })
+    node
+  }
+
+  @Deprecated
+  def addElementsToNode(nodeId: String, count: Integer): Unit = {
+    nodesRDD = nodesRDD.map(node => {
+      var map: List[(Integer, Long)] = List()
+      var i: Integer = 0
+      var stop = false
+      while (i < nodeId.length && i < node._1.length && !stop) {
+        if (nodeId(i) == node._1(i)) {
+          map = map :+ (i, count.toLong)
+        } else {
+          stop = true
+        }
+        i = i + 1
+      }
+
+      val newNode = node
+      newNode._2.increaseCounts(map)
+      newNode
+    })
+  }
+
+  @Deprecated
+  def deleteElementsFromNode(nodeId: String, count: Integer): Unit = {
+    nodesRDD = nodesRDD.map(node => {
+      var map: List[(Integer, Long)] = List()
+      var i: Integer = 0
+      var stop = false
+      while (i < nodeId.length && i < node._1.length && !stop) {
+        if (nodeId(i) == node._1(i)) {
+          map = map :+ (i, count.toLong)
+        } else {
+          stop = true
+        }
+        i = i + 1
+      }
+
+      val newNode = node
+      newNode._2.decreaseCounts(map)
+      newNode
+    })
   }
 
 }

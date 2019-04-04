@@ -2,10 +2,7 @@ package structure
 
 import scala.math.sqrt
 
-// TODO: Works for 2d points only
-class QuadNode(parentId: String, id: String, x0: Double, y0: Double, w: Double, h: Double) extends Serializable {
-
-  val MAX_ELEMENTS_ALLOWED: Integer = 20
+class QuadNode(parentId: String, id: String, x0: Double, y0: Double, w: Double, h: Double, neighborhoodSize: Int) extends Serializable {
 
   var hasChildren: Boolean = false
 
@@ -16,6 +13,7 @@ class QuadNode(parentId: String, id: String, x0: Double, y0: Double, w: Double, 
   def getId: String = id
   def getLevel: Integer = id.length - 1
   def getCount: Long = counts(id.length - 1)
+  def getNeighborhoodSize: Int = neighborhoodSize
 
   def increaseCounts(countsMap: List[(Integer, Long)]): Unit = {
     for (pair <- countsMap) {
@@ -56,16 +54,16 @@ class QuadNode(parentId: String, id: String, x0: Double, y0: Double, w: Double, 
     if (needToBreak && !hasChildren){
 
       // Splitting elements to 4 squares, creating 4 new nodes, and pass the elements over to them
-      val quadNode0 = new QuadNode(id, id + "0", x0, y0, w/2, h/2)
+      val quadNode0 = new QuadNode(id, id + "0", x0, y0, w/2, h/2, neighborhoodSize)
       quadNode0.increaseCountsOnNodeBreak(counts, elements.count(el => quadNode0.elementInBoundaries(el)))
 
-      val quadNode1 = new QuadNode(id, id + "1", x0 + w/2, y0, w/2, h/2)
+      val quadNode1 = new QuadNode(id, id + "1", x0 + w/2, y0, w/2, h/2, neighborhoodSize)
       quadNode1.increaseCountsOnNodeBreak(counts, elements.count(el => quadNode1.elementInBoundaries(el)))
 
-      val quadNode2 = new QuadNode(id, id + "2", x0, y0 + h/2, w/2, h/2)
+      val quadNode2 = new QuadNode(id, id + "2", x0, y0 + h/2, w/2, h/2, neighborhoodSize)
       quadNode2.increaseCountsOnNodeBreak(counts, elements.count(el => quadNode2.elementInBoundaries(el)))
 
-      val quadNode3 = new QuadNode(id, id + "3", x0 + w/2, y0 + h/2, w/2, h/2)
+      val quadNode3 = new QuadNode(id, id + "3", x0 + w/2, y0 + h/2, w/2, h/2, neighborhoodSize)
       quadNode3.increaseCountsOnNodeBreak(counts, elements.count(el => quadNode3.elementInBoundaries(el)))
 
       hasChildren = true // node now has its elements in its children
@@ -84,7 +82,7 @@ class QuadNode(parentId: String, id: String, x0: Double, y0: Double, w: Double, 
     }
   }
 
-  private def needToBreak(): Boolean = { getCount > MAX_ELEMENTS_ALLOWED }
+  private def needToBreak(): Boolean = { getCount > neighborhoodSize }
 
   def getBoundaries: String = {
     "(X[" + x0 + ", " + (x0+w) + "], Y[" + y0 + ", " + (y0+h) + "])"

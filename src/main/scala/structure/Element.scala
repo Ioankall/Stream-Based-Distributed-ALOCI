@@ -1,20 +1,20 @@
 package structure
 
-import java.sql.Timestamp
-import java.time.LocalDateTime
+class Element (val vector: Array[Double], val numOfTrees: Integer) extends Serializable {
 
-class Element (var vector: Array[Double], var numOfTrees: Integer) extends Serializable {
-
-  var timestamp: Timestamp = Timestamp.valueOf(LocalDateTime.now())
+  var timestamp: Long = System.currentTimeMillis()
 
   var belongsToNode: Array[String] = new Array[String](numOfTrees)
   var distanceFromNode: Array[Double] = new Array[Double](numOfTrees)
   var outlierScores: Array[Double] = new Array[Double](numOfTrees)
 
+  @Deprecated
+  var outlierScoreOld: Double = 0
+
   for (i <- 0 until numOfTrees) belongsToNode(i) = "-1"
 
-  def updateTimeStamp: Unit = {
-    timestamp = Timestamp.valueOf(LocalDateTime.now())
+  def updateTimeStamp(time: Long): Unit = {
+    timestamp = time
   }
 
   def outlierScore: Double = {
